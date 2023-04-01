@@ -12,198 +12,111 @@ import OpenEXR
 from PIL import Image
 from skimage import img_as_float
 import matplotlib.pyplot as plt
+import cv2
 
-#read kcams.txt file
-def read_kcamfile(file):
-    d = {}
-    with open(file) as f:
-        for line in f:
-            (key, val) = line.split()
-            d[int(key)] = float(val)
-    return d
-
-# to calculate circle of confusion to train defocusNet
-def _abs_val(x):
-    if isinstance(x, np.ndarray) or isinstance(x, float) or isinstance(x, int):
-        return np.abs(x)
-    else:
-        return x.abs()
-
-class CameraLens:
-    def __init__(self, focal_length, sensor_size_full=(0, 0), resolution=(1, 1), aperture_diameter=None, f_number=None, depth_scale=1):
-        self.focal_length = focal_length
-        self.depth_scale = depth_scale
-        self.sensor_size_full = sensor_size_full
-
-        if aperture_diameter is not None:
-            self.aperture_diameter = aperture_diameter
-            self.f_number = (focal_length / aperture_diameter) if aperture_diameter != 0 else 0
-        else:
-            self.f_number = f_number
-            self.aperture_diameter = focal_length / f_number
-
-        if self.sensor_size_full is not None:
-            self.resolution = resolution
-            self.aspect_ratio = resolution[0] / resolution[1]
-            self.sensor_size = [self.sensor_size_full[0], self.sensor_size_full[0] / self.aspect_ratio]
-        else:
-            self.resolution = None
-            self.aspect_ratio = None
-            self.sensor_size = None
-            self.fov = None
-            self.focal_length_pixel = None
-
-    def _get_indep_fac(self, focus_distance):
-        return (self.aperture_diameter * self.focal_length) / (focus_distance - self.focal_length)
-
-    def get_coc(self, focus_distance, depth):
-        if isinstance(focus_distance, torch.Tensor):
-            for _ in range(len(depth.shape) - len(focus_distance.shape)):
-                focus_distance = focus_distance.unsqueeze(-1)
-
-        return (_abs_val(depth - focus_distance) / depth) * self._get_indep_fac(focus_distance)
-
+# img=cv2.imread('D://handsdata//nyu_out//train//depth//depth_1_0000001.png',cv2.IMREAD_UNCHANGED)
+# plt.imshow(img)
+# plt.show()
 # reading depth files
 def read_dpt(img_dpt_path): 
-    dpt_img = OpenEXR.InputFile(img_dpt_path)
-    dw = dpt_img.header()['dataWindow']
-    size = (dw.max.x - dw.min.x + 1, dw.max.y - dw.min.y + 1)
-    (r, g, b) = dpt_img.channels("RGB")
-    dpt = np.fromstring(r, dtype=np.float16)
-    dpt.shape = (size[1], size[0])
-    return dpt
+    # dpt_img = OpenEXR.InputFile(img_dpt_path)
+    dpt_img=cv2.imread(img_dpt_path,cv2.IMREAD_UNCHANGED)
+    #converting from mm to m
+    dpt_img=dpt_img/1000.
+    return dpt_img
 
 # to calculate circle of confusion
-'''
-output |s2-s1|/s2
-'''
 def get_blur(s1,s2,f,kcam):
-    blur=abs(s2-s1)/s2 * 1/(s1-f*1e-3)*1/kcam
+    blur=abs(s2-s1)/s2 * 1/(s1-f)*kcam
     return blur
 
 '''
 All in-focus image is attached to the input matrix after the RGB image
 
-focus_dist - available focal dists in the dataset
-req_f_indx - a list of focal dists we require.
-
-fstack=0
-a single image from the focal stack will be returned.
-The image will be randomly selected from indices in req_f_indx
-fstack=1
-several images comprising of the focal stack will be returned. 
-indices of the focal distances will be selected from req_f_indx
-
-if aif=1 : 
-    all in focus image will be appended at the begining of the focal stack
-
 input matrix channles :
 [batch,image,rgb_channel,256,256]
 
-if aif=1 and fstack=1
-image 0 : all in focus image
-image 1:-1 : focal stack
-if aif=0
-image 0:-1 : focal stack
-
-if fstack=0
-
-output: [depth, blur1, blur2,]
-blur1,blur2... corresponds to the focal stack
+output: [blur,depth]
 '''
 
 class ImageDataset(torch.utils.data.Dataset):
     """Focal place dataset."""
 
-    def __init__(self, root_dir, transform_fnc=None,fstack=0, max_dpt = 3.,blurclip=10.):
+    def __init__(self, root_dir, transform_fnc=None, max_dpt = 3.,blurclip=10.):
 
         self.root_dir = root_dir
         print("image data root dir : " +str(self.root_dir))
         self.transform_fnc = transform_fnc
-        self.fstack=fstack
         self.blurclip=blurclip
 
         ##### Load and sort all images
-        rgbpath=root_dir+"rgb\\"
-        depthpath=root_dir+"depth\\"
-        self.imglist_rgb = [f for f in listdir(rgbpath) if isfile(join(rgbpath, f)) and f[-3:] == "png"]
-        self.imglist_dpt = [f for f in listdir(depthpath) if isfile(join(depthpath, f)) and f[-3:] == "png"]
+        self.rgbpath=root_dir+"blur\\rgb\\"
+        self.depthpath=root_dir+"depth\\"
+        self.segpath=root_dir+"seg\\"
+        self.imglist_rgb = [f for f in listdir(self.rgbpath) if isfile(join(self.rgbpath, f)) and f[-3:] == "png"]
+        self.imglist_dpt = [f for f in listdir(self.depthpath) if isfile(join(self.depthpath, f)) and f[-3:] == "png"]
+        self.imglist_seg = [f for f in listdir(self.segpath) if isfile(join(self.segpath, f)) and f[-3:] == "png"]
 
         print("Total number of rgb files", len(self.imglist_rgb))
         print("Total number of depth files", len(self.imglist_dpt))
+        print("Total number of segmentation mask files", len(self.imglist_dpt))
 
         self.imglist_rgb.sort()
         self.imglist_dpt.sort()
+        self.imglist_seg.sort()
 
         self.max_dpt = max_dpt
+        #focal length in m
+        self.f=25e-3
+        self.N=1.9
+        self.px=6*1e-6*6
+        self.s1=0.7
+        self.kcam=self.f**2/(self.N*self.px)
 
     def __len__(self):
         return int(len(self.imglist_dpt))
 
     def __getitem__(self, idx):
-        if(self.fstack):
-            #if stack is needed return all fdists from req_f_idx
-            reqar=self.req_f_idx
-        else:
-            reqar=[random.choice(self.req_f_idx)]
-
         # add RGB, CoC, Depth inputs
         mats_input = np.zeros((256, 256, 3,0))
         mats_output = np.zeros((256, 256, 0))
 
         ##### Read and process an image
-        idx_dpt = int(idx)
-        img_dpt = read_dpt(self.root_dir + self.imglist_dpt[idx_dpt])
+        ind = int(idx)
+        img_dpt = read_dpt(self.depthpath + self.imglist_dpt[ind])
+
         #img_dpt_scaled = np.clip(img_dpt, 0., 1.9)
         #mat_dpt_scaled = img_dpt_scaled / 1.9
         mat_dpt_scaled = img_dpt/self.max_dpt
         mat_dpt = mat_dpt_scaled.copy()[:, :, np.newaxis]
+        im=cv2.imread(self.rgbpath + self.imglist_rgb[ind],cv2.IMREAD_UNCHANGED)
+        # im = Image.open(self.rgbpath + self.imglist_rgb[ind])
+        img_all = np.array(im)
+        mat_all = img_all.copy() / 255.
+        mat_all=np.expand_dims(mat_all,axis=-1)
+        print(self.imglist_rgb[ind])
+        print('mats_input:'+str(mats_input.shape))
+        print('mat_all:'+str(mat_all.shape))
+        mats_input = np.concatenate((mats_input, mat_all), axis=3)
+        img_msk = get_blur(self.s1,img_dpt,self.f,self.kcam)
 
-        #extract N from the file name
-        if(self.dataset=='blender'):
-            kcam_val=float(self.imglist_dpt[idx_dpt].split('_')[1])
-            if(not self.kcampath):
-                kcam=kcam_val
-            else:
-                kcam=self.kcamdict[kcam_val]
-            f=float(self.imglist_dpt[idx_dpt].split('_')[2])
-        elif(self.dataset=='defocusnet'):
-            kcam=1.43988
-            f=2.9
-        ind = idx * self.img_num
+        img_msk = img_msk / self.blurclip
+        #img_msk = np.clip(img_msk, 0, 1.0e-4) / 1.0e-4
+        mat_msk = img_msk.copy()[:, :, np.newaxis]
 
-        #if all in-focus image is also needed append that to the input matrix
-        if self.aif:
-            im = Image.open(self.root_dir + self.imglist_allif[idx])
-            img_all = np.array(im)
-            mat_all = img_all.copy() / 255.
-            mat_all=np.expand_dims(mat_all,axis=-1)
-            mats_input = np.concatenate((mats_input, mat_all), axis=3)
-        fdist=np.zeros((0))
-        for req in reqar:
-            im = Image.open(self.root_dir + self.imglist_all[ind + req])
-            img_all = np.array(im)
-            mat_all = img_all.copy() / 255.
-            mat_all=np.expand_dims(mat_all,axis=-1)
-            mats_input = np.concatenate((mats_input, mat_all), axis=3)
-            
-            img_msk = get_blur(self.focus_dist[req], img_dpt,f,kcam)
-            img_msk = img_msk / self.blurclip
-            #img_msk = np.clip(img_msk, 0, 1.0e-4) / 1.0e-4
-            mat_msk = img_msk.copy()[:, :, np.newaxis]
-
-            #append blur to the output
-            mats_output = np.concatenate((mats_output, mat_msk), axis=2)
-            fdist=np.concatenate((fdist,[self.focus_dist[req]]),axis=0)
-        
+        #append blur to the output
+        # print('blur:'+str(mat_msk.shape))
+        mats_output = np.concatenate((mats_output, mat_msk), axis=2)
         #append depth to the output
+        # print('depth:'+str(mat_dpt.shape))
+        print(self.imglist_dpt[ind])
         mats_output = np.concatenate((mats_output, mat_dpt), axis=2)
         
         sample = {'input': mats_input, 'output': mats_output}
 
         if self.transform_fnc:
             sample = self.transform_fnc(sample)
-        sample = {'input': sample['input'], 'output': sample['output'],'fdist':fdist,'kcam':kcam,'f':f*1e-3}
+        sample = {'input': sample['input'], 'output': sample['output']}
         return sample
 
 
@@ -217,13 +130,11 @@ class ToTensor(object):
                 'output': torch.from_numpy(mats_output),}
 
 
-def load_data(data_dir, blur,train_split,fstack,
+def load_data(data_dir, blur,train_split,
               WORKERS_NUM, BATCH_SIZE, MAX_DPT,blurclip=10.0):
-    img_dataset = ImageDataset(root_dir=data_dir,transform_fnc=transforms.Compose([ToTensor()]),
-                                fstack=fstack, max_dpt=MAX_DPT,
+    img_dataset = ImageDataset(root_dir=data_dir,transform_fnc=transforms.Compose([ToTensor()]),max_dpt=MAX_DPT,
                                blurclip=blurclip)
-    return 0
-
+    
     indices = list(range(len(img_dataset)))
     split = int(len(img_dataset) * train_split)
 
@@ -243,18 +154,51 @@ def load_data(data_dir, blur,train_split,fstack,
 
     return [loader_train, loader_valid], total_steps
 
-print('starting...')
+# print('starting...')
+# datapath='D:\\handsdata\\nyu_out\\train\\'
+# loaders, total_steps = load_data(datapath,blur=1,train_split=0.8,WORKERS_NUM=0,
+#         BATCH_SIZE=1,MAX_DPT=1.0,blurclip=10)
+# for st_iter, sample_batch in enumerate(loaders[0]):
+#     break
+
+# img=sample_batch['input'].squeeze().numpy()[0,:,:]
+# plt.imshow(img)
+# plt.show()
+
+# img=sample_batch['output'].squeeze().numpy()[0,:,:]
+# plt.imshow(img)
+# plt.show()
+
+# import os
+
+# rgbpath='D:\\handsdata\\nyu_out\\train\\blur\\rgb\\'
+# depthpath='D:\\handsdata\\nyu_out\\train\\depth\\'
+# segpath='D:\\handsdata\\nyu_out\\train\\seg\\'
+# imglist_rgb = [f for f in listdir(rgbpath) if isfile(join(rgbpath, f)) and f[-3:] == "png"]
+# imglist_dpt = [f for f in listdir(depthpath) if isfile(join(depthpath, f)) and f[-3:] == "png"]
+# imglist_seg = [f for f in listdir(segpath) if isfile(join(segpath, f)) and f[-3:] == "png"]
+# imglist_rgb.sort()
+# imglist_dpt.sort()
+# imglist_seg.sort()
+
+# sum=0
+# for i,img in enumerate(imglist_rgb):
+#     im=cv2.imread(rgbpath+img)
+#     s=im.shape
+#     if(s!=(256,256,3)):
+#         sum+=1
+#         print(img)
+#         os.remove(rgbpath+img)
+#         os.remove(depthpath+imglist_dpt[i])
+#         os.remove(segpath+imglist_seg[i])
+
+
+
 datapath='D:\\handsdata\\nyu_out\\train\\'
-loaders, total_steps = load_data(datapath,blur=1,train_split=0.8,fstack=0,WORKERS_NUM=0,
-        BATCH_SIZE=1,MAX_DPT=1.0)
-
-
-
-datapath='C:\\usr\\wiss\\maximov\\RD\\DepthFocus\\Datasets\\focal_data\\'
 blurclip=1
 def get_data_stats(datapath,blurclip):
-    loaders, total_steps = load_data(datapath,blur=1,aif=0,train_split=0.8,fstack=0,WORKERS_NUM=0,
-        BATCH_SIZE=1,FOCUS_DIST=[0.1,.15,.3,0.7,1.5,100000],REQ_F_IDX=[0,1,2,3,4],MAX_DPT=1.0,blurclip=blurclip)
+    loaders, total_steps = load_data(datapath,blur=1,train_split=0.8,WORKERS_NUM=0,
+        BATCH_SIZE=1,MAX_DPT=1.0,blurclip=blurclip)
     print('stats of train data')
     get_loader_stats(loaders[0])
     print('______')
@@ -279,9 +223,9 @@ def get_loader_stats(loader):
         count+=1
     
         #blur (|s2-s1|/(s2*(s1-f)))
-        gt_step1 = Y[:, :-1, :, :]
+        gt_step1 = Y[:, 0, :, :]
         #depth in m
-        gt_step2 = Y[:, -1:, :, :]
+        gt_step2 = Y[:, 1, :, :]
         
         depthmin_=torch.min(gt_step2).cpu().item()
         if(depthmin_<depthmin):
@@ -310,6 +254,8 @@ def get_loader_stats(loader):
     print('blur min='+str(blurmin))
     print('blur max='+str(blurmax))
     print('blur mean='+str(blurmean/count))
+
+get_data_stats(datapath,blurclip)
 
 '''
 blur_thres=7.0
