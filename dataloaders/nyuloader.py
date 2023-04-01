@@ -94,9 +94,9 @@ class ImageDataset(torch.utils.data.Dataset):
         img_all = np.array(im)
         mat_all = img_all.copy() / 255.
         mat_all=np.expand_dims(mat_all,axis=-1)
-        print(self.imglist_rgb[ind])
-        print('mats_input:'+str(mats_input.shape))
-        print('mat_all:'+str(mat_all.shape))
+        # print(self.imglist_rgb[ind])
+        # print('mats_input:'+str(mats_input.shape))
+        # print('mat_all:'+str(mat_all.shape))
         mats_input = np.concatenate((mats_input, mat_all), axis=3)
         img_msk = get_blur(self.s1,img_dpt,self.f,self.kcam)
 
@@ -109,7 +109,6 @@ class ImageDataset(torch.utils.data.Dataset):
         mats_output = np.concatenate((mats_output, mat_msk), axis=2)
         #append depth to the output
         # print('depth:'+str(mat_dpt.shape))
-        print(self.imglist_dpt[ind])
         mats_output = np.concatenate((mats_output, mat_dpt), axis=2)
         
         sample = {'input': mats_input, 'output': mats_output}
@@ -196,6 +195,16 @@ def load_data(data_dir, blur,train_split,
 
 datapath='D:\\handsdata\\nyu_out\\train\\'
 blurclip=1
+
+'''
+stats:
+depth
+min 0.25  max 2.0
+
+blur 
+min 0.0  max  24.3
+'''
+
 def get_data_stats(datapath,blurclip):
     loaders, total_steps = load_data(datapath,blur=1,train_split=0.8,WORKERS_NUM=0,
         BATCH_SIZE=1,MAX_DPT=1.0,blurclip=blurclip)
@@ -255,7 +264,7 @@ def get_loader_stats(loader):
     print('blur max='+str(blurmax))
     print('blur mean='+str(blurmean/count))
 
-get_data_stats(datapath,blurclip)
+# get_data_stats(datapath,blurclip)
 
 '''
 blur_thres=7.0
