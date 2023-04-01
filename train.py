@@ -6,18 +6,8 @@ Created on Wed Aug 29 14:54:12 2018
 """
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data
-from torchvision import transforms, utils
-
-import numpy as np
-import importlib
-import random
-import math
-from sacred import Experiment
-import csv
 import argparse
 from dataloaders import nyuloader
 from model import defnet
@@ -28,7 +18,7 @@ parser.add_argument('--depthscale', default=1.9,help='divide all depths by this 
 parser.add_argument('--fscale', default=1.9,help='divide all focal distances by this value')
 parser.add_argument('--blurclip', default=25,help='Clip blur by this value : only applicable for camind model. Default=10')
 parser.add_argument('--blurweight', default=1.0,help='weight for blur loss')
-parser.add_argument('--checkpt', default=None, help='path to the saved model')
+parser.add_argument('--checkpt', default='C:\\Users\\lahir\\models\\handblur\\best_ep0.pth', help='path to the saved model')
 parser.add_argument('--s2limits', nargs='+', default=[0.1,3.],  help='the interval of depth where the errors are calculated')
 parser.add_argument('--dataset', default='defocusnet', help='blender data path')
 parser.add_argument('--camind', type=bool,default=False, help='True: use camera independent model. False: use defocusnet model')
@@ -65,8 +55,8 @@ model_params = model.parameters()
 # loading weights of the first step
 if args.checkpt:
     print('loading model....')
-    print('model path :'+args.savedmodel)
-    pretrained_dict = torch.load(args.savedmodel)
+    print('model path :'+args.checkpt)
+    pretrained_dict = torch.load(args.checkpt)
     model_dict = model.state_dict()
     for param_tensor in model_dict:
         for param_pre in pretrained_dict:
