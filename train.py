@@ -22,7 +22,7 @@ parser.add_argument('--checkpt', default='C:\\Users\\lahir\\models\\handblur\\be
 parser.add_argument('--s2limits', nargs='+', default=[0.1,3.],  help='the interval of depth where the errors are calculated')
 parser.add_argument('--dataset', default='defocusnet', help='blender data path')
 parser.add_argument('--camind', type=bool,default=False, help='True: use camera independent model. False: use defocusnet model')
-parser.add_argument('--aif', type=bool,default=False, help='True: Train with the AiF images. False: Train with blurred images')
+parser.add_argument('--seg', type=bool,default=True, help='Use hand segmentation to train and eval')
 parser.add_argument('--epochs', type=int,default=1000, help='training batch size')
 parser.add_argument('--savemodel', default='C:\\Users\\lahir\\models\\handblur\\', help='path to the saved model')
 
@@ -68,15 +68,28 @@ if args.checkpt:
 torch.manual_seed(2023)
 torch.cuda.manual_seed(2023)
 
-
 def eval():
     model.eval()
     total_d_loss=0
     iter=0
+    mean_depth=0
     for st_iter, sample_batch in enumerate(loaders[1]):
         # Setting up input and output data
         X = sample_batch['input'][:,0,:,:,:].float().to('cuda')
         Y = sample_batch['output'].float().to('cuda')
+        seg=sample_batch['seg'].to('cuda')
+        
+
+        # import matplotlib.pyplot as plt
+        # seg=sample_batch['seg']
+        # seg=seg.detach().cpu().squeeze().numpy()
+        # plt.imshow(seg)
+        # plt.show()
+
+        # img=X.cpu().squeeze().numpy()
+        # plt.imshow(img[0,:,:])
+        # plt.show()
+
         
         #blur (|s2-s1|/(s2*(s1-f)))
         gt_step1 = Y[:, :-1, :, :]
@@ -85,7 +98,12 @@ def eval():
         
         # we only use focal stacks with a single image
         stacknum = 1
-        mask=(gt_step2>0.).int()
+        if(args.seg):
+            mask=(seg>0).int()
+        else:
+            mask=torch.ones_like(seg)
+        if(torch.sum(mask).item()==0):
+            continue
 
         X2_fcs = torch.ones([X.shape[0], 1 * stacknum, X.shape[2], X.shape[3]])
         s1_fcs = torch.ones([X.shape[0], 1 * stacknum, X.shape[2], X.shape[3]])
@@ -98,9 +116,11 @@ def eval():
         s1_fcs = s1_fcs.float().to('cuda')
         # Forward and compute loss
         output_step1,output_step2,_ = model(X,camparam=X2_fcs,foc_dist=s1_fcs)
-        depth_loss=torch.mean(torch.square(output_step2*args.depthscale-gt_step2*args.depthscale))
+        depth_loss=torch.sum(torch.square(output_step2*args.depthscale*mask-gt_step2*args.depthscale*mask))/torch.sum(mask)
+        # mean_depth+=(torch.sum(gt_step2*args.depthscale*mask)/torch.sum(mask)).item()
         total_d_loss+=depth_loss.item()
         iter+=1
+    # print('mean depth='+str(mean_depth/iter))
     return total_d_loss/iter
 
 
@@ -123,6 +143,15 @@ def train_model():
             # Setting up input and output data
             X = sample_batch['input'][:,0,:,:,:].float().to('cuda')
             Y = sample_batch['output'].float().to('cuda')
+            seg=sample_batch['seg'].to('cuda')
+
+            if(args.seg):
+                mask=(seg>0).int()
+            else:
+                mask=torch.ones_like(seg)
+            if(torch.sum(mask).item()==0):
+                continue
+
             optimizer.zero_grad()
             
             #blur (|s2-s1|/(s2*(s1-f)))
@@ -132,7 +161,6 @@ def train_model():
             
             # we only use focal stacks with a single image
             stacknum = 1
-            mask=(gt_step2>0.).int()
 
             X2_fcs = torch.ones([X.shape[0], 1 * stacknum, X.shape[2], X.shape[3]])
             s1_fcs = torch.ones([X.shape[0], 1 * stacknum, X.shape[2], X.shape[3]])
@@ -180,7 +208,7 @@ def train_model():
         #save model if better than the previous best model
         if(depth_loss_eval<min_depth_loss_eval):
             print('saving model')
-            torch.save(model.state_dict(),args.savemodel+'best_ep' + str(0) + '.pth')
+            torch.save(model.state_dict(),args.savemodel+'best_seg_ep' + str(0) + '.pth')
             min_depth_loss_eval=depth_loss_eval
 
         # # Save model

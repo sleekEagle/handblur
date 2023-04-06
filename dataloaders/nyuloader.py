@@ -81,52 +81,49 @@ class ImageDataset(torch.utils.data.Dataset):
         mats_input = np.zeros((256, 256, 3,0))
         mats_output = np.zeros((256, 256, 0))
 
-        ##### Read and process an image
+        ##### Read depth image
         ind = int(idx)
         img_dpt = read_dpt(self.depthpath + self.imglist_dpt[ind])
-
-        #img_dpt_scaled = np.clip(img_dpt, 0., 1.9)
-        #mat_dpt_scaled = img_dpt_scaled / 1.9
         mat_dpt_scaled = img_dpt/self.max_dpt
         mat_dpt = mat_dpt_scaled.copy()[:, :, np.newaxis]
+
+        #read rgb image
         im=cv2.imread(self.rgbpath + self.imglist_rgb[ind],cv2.IMREAD_UNCHANGED)
-        # im = Image.open(self.rgbpath + self.imglist_rgb[ind])
         img_all = np.array(im)
         mat_all = img_all.copy() / 255.
         mat_all=np.expand_dims(mat_all,axis=-1)
-        # print(self.imglist_rgb[ind])
-        # print('mats_input:'+str(mats_input.shape))
-        # print('mat_all:'+str(mat_all.shape))
         mats_input = np.concatenate((mats_input, mat_all), axis=3)
+
+        #read hand segmentation image
+        seg=cv2.imread(self.segpath + self.imglist_seg[ind],cv2.IMREAD_UNCHANGED)
+        seg=np.array(seg)
+
+        #get blur
         img_msk = get_blur(self.s1,img_dpt,self.f,self.kcam)
-
         img_msk = img_msk / self.blurclip
-        #img_msk = np.clip(img_msk, 0, 1.0e-4) / 1.0e-4
         mat_msk = img_msk.copy()[:, :, np.newaxis]
-
         #append blur to the output
-        # print('blur:'+str(mat_msk.shape))
         mats_output = np.concatenate((mats_output, mat_msk), axis=2)
         #append depth to the output
-        # print('depth:'+str(mat_dpt.shape))
         mats_output = np.concatenate((mats_output, mat_dpt), axis=2)
         
-        sample = {'input': mats_input, 'output': mats_output}
+        sample = {'input': mats_input, 'output': mats_output,'seg':seg}
 
         if self.transform_fnc:
             sample = self.transform_fnc(sample)
-        sample = {'input': sample['input'], 'output': sample['output']}
+        sample = {'input': sample['input'], 'output': sample['output'],'seg':sample['seg']}
         return sample
 
 
 class ToTensor(object):
     def __call__(self, sample):
-        mats_input, mats_output = sample['input'], sample['output']
+        mats_input, mats_output,seg = sample['input'],sample['output'],sample['seg']
 
         mats_input = mats_input.transpose((3,2, 0, 1))
         mats_output = mats_output.transpose((2, 0, 1))
         return {'input': torch.from_numpy(mats_input),
-                'output': torch.from_numpy(mats_output),}
+                'output': torch.from_numpy(mats_output),
+                'seg':torch.from_numpy(seg)}
 
 
 def load_data(data_dir, blur,train_split,
