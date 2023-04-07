@@ -120,7 +120,7 @@ def get_cropped_image(imagepath):
 
 
 '''
-dataprep for our dataset
+dataprep for our kinect dataset
 '''
 
 rgbpath='C:\\Users\\lahir\\kinect_hand_data\\extracted\\lahiru1\\color\\'
@@ -168,9 +168,6 @@ for i,seg in enumerate(segfiles):
         continue
     segimg=cv2.imread(segpath+seg,cv2.IMREAD_UNCHANGED)
     output = cv2.resize(segimg, (rgb_size[1],rgb_size[0]))
-    print("rgb size:"+str(rgb_size))
-    print('out size:'+str(output.shape))
-    print('*****')
     res=cv2.imwrite(segout+seg,output)
 
     
