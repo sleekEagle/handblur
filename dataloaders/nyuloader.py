@@ -50,12 +50,12 @@ class ImageDataset(torch.utils.data.Dataset):
         self.blurclip=blurclip
 
         ##### Load and sort all images
-        self.rgbpath=root_dir+"blur\\rgb\\"
+        self.rgbpath=root_dir+"blur\\"
         self.depthpath=root_dir+"depth\\"
-        self.segpath=root_dir+"seg\\"
+        self.segpath=root_dir+"seg_resized\\"
         self.imglist_rgb = [f for f in listdir(self.rgbpath) if isfile(join(self.rgbpath, f)) and f[-3:] == "png"]
         self.imglist_dpt = [f for f in listdir(self.depthpath) if isfile(join(self.depthpath, f)) and f[-3:] == "png"]
-        self.imglist_seg = [f for f in listdir(self.segpath) if isfile(join(self.segpath, f)) and f[-3:] == "png"]
+        self.imglist_seg = [f for f in listdir(self.segpath) if isfile(join(self.segpath, f)) and f[-3:] == "jpg"]
 
         print("Total number of rgb files", len(self.imglist_rgb))
         print("Total number of depth files", len(self.imglist_dpt))
@@ -77,10 +77,6 @@ class ImageDataset(torch.utils.data.Dataset):
         return int(len(self.imglist_dpt))
 
     def __getitem__(self, idx):
-        # add RGB, CoC, Depth inputs
-        mats_input = np.zeros((256, 256, 3,0))
-        mats_output = np.zeros((256, 256, 0))
-
         ##### Read depth image
         ind = int(idx)
         img_dpt = read_dpt(self.depthpath + self.imglist_dpt[ind])
@@ -89,46 +85,43 @@ class ImageDataset(torch.utils.data.Dataset):
 
         #read rgb image
         im=cv2.imread(self.rgbpath + self.imglist_rgb[ind],cv2.IMREAD_UNCHANGED)
-        img_all = np.array(im)
-        mat_all = img_all.copy() / 255.
-        mat_all=np.expand_dims(mat_all,axis=-1)
-        mats_input = np.concatenate((mats_input, mat_all), axis=3)
+        im = np.array(im)
+        mat_rgb = im.copy() / 255.
 
         #read hand segmentation image
         seg=cv2.imread(self.segpath + self.imglist_seg[ind],cv2.IMREAD_UNCHANGED)
-        seg=np.array(seg)
+        seg=np.expand_dims(seg,axis=2)
 
         #get blur
         img_msk = get_blur(self.s1,img_dpt,self.f,self.kcam)
         img_msk = img_msk / self.blurclip
-        mat_msk = img_msk.copy()[:, :, np.newaxis]
-        #append blur to the output
-        mats_output = np.concatenate((mats_output, mat_msk), axis=2)
-        #append depth to the output
-        mats_output = np.concatenate((mats_output, mat_dpt), axis=2)
-        
-        sample = {'input': mats_input, 'output': mats_output,'seg':seg}
+        mat_blur = img_msk.copy()[:, :, np.newaxis]
 
+        #create a single matrix with rgb,depth,blur and seg
+        data=np.concatenate([mat_rgb,mat_dpt,mat_blur,seg],axis=2)
+        
         if self.transform_fnc:
-            sample = self.transform_fnc(sample)
-        sample = {'input': sample['input'], 'output': sample['output'],'seg':sample['seg']}
+            sample = self.transform_fnc(data)
+        sample = {'rgb': sample[:3,:,:], 'depth': sample[3,:,:],'blur':sample[4,:,:],'seg':sample[5,:,:]}
         return sample
 
-
-class ToTensor(object):
-    def __call__(self, sample):
-        mats_input, mats_output,seg = sample['input'],sample['output'],sample['seg']
-
-        mats_input = mats_input.transpose((3,2, 0, 1))
-        mats_output = mats_output.transpose((2, 0, 1))
-        return {'input': torch.from_numpy(mats_input),
-                'output': torch.from_numpy(mats_output),
-                'seg':torch.from_numpy(seg)}
+class Transform(object):
+    def __call__(self, image):
+        image=torch.from_numpy(image)
+        image=torch.permute(image,(2,0,1))
+        return image
 
 
 def load_data(data_dir, blur,train_split,
               WORKERS_NUM, BATCH_SIZE, MAX_DPT,blurclip=10.0):
-    img_dataset = ImageDataset(root_dir=data_dir,transform_fnc=transforms.Compose([ToTensor()]),max_dpt=MAX_DPT,
+    tr=transforms.Compose([
+        Transform(),
+        transforms.RandomCrop((256,256),pad_if_needed=True),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip()
+        ])
+    
+    img_dataset = ImageDataset(root_dir=data_dir,transform_fnc=tr,max_dpt=MAX_DPT,
                                blurclip=blurclip)
     
     indices = list(range(len(img_dataset)))
@@ -150,15 +143,32 @@ def load_data(data_dir, blur,train_split,
 
     return [loader_train, loader_valid], total_steps
 
-# print('starting...')
-# datapath='D:\\handsdata\\nyu_out\\train\\'
+# datapath='C:\\Users\\lahir\\kinect_hand_data\\extracted\\lahiru1\\cropped\\'
 # loaders, total_steps = load_data(datapath,blur=1,train_split=0.8,WORKERS_NUM=0,
-#         BATCH_SIZE=1,MAX_DPT=1.0,blurclip=10)
+#         BATCH_SIZE=10,MAX_DPT=1.0,blurclip=10)
+
 # for st_iter, sample_batch in enumerate(loaders[0]):
+#     X=sample_batch['rgb'].float().to('cuda')
+#     depth=sample_batch['depth']
+#     blur=sample_batch['blur']
+#     seg=sample_batch['seg']
+#     gt_step1=blur.float().to('cuda')
+#     gt_step2=depth.float().to('cuda')
+#     gt_step1=torch.unsqueeze(gt_step1,dim=1)
+#     gt_step2=torch.unsqueeze(gt_step2,dim=1)
 #     break
 
+# import matplotlib.pyplot as plt
+# img=X[9,:,:,:].detach().cpu().permute(1,2,0)
+# d=gt_step1[9,0,:,:].detach().cpu()
+# f, axarr = plt.subplots(1,2)
+# axarr[0].imshow(img)
+# axarr[1].imshow(d)
+# plt.show()
+
+
 # img=sample_batch['input'].squeeze().numpy()[0,:,:]
-# plt.imshow(img)
+# plt.imshow(seg[0,:,:])
 # plt.show()
 
 # img=sample_batch['output'].squeeze().numpy()[0,:,:]
@@ -190,24 +200,36 @@ def load_data(data_dir, blur,train_split,
 
 
 
-datapath='D:\\handsdata\\nyu_out\\train\\'
+datapath='C:\\Users\\lahir\\kinect_hand_data\\extracted\\lahiru1\\cropped\\'
 blurclip=1
 
 '''
 stats:
 depth
-min 0.25  max 2.0
+min 0.1  max 13.73
 
 blur 
-min 0.0  max  24.3
+min 0.0  max  74.20
 '''
 
 def get_data_stats(datapath,blurclip):
     loaders, total_steps = load_data(datapath,blur=1,train_split=0.8,WORKERS_NUM=0,
-        BATCH_SIZE=1,MAX_DPT=1.0,blurclip=blurclip)
+        BATCH_SIZE=10,MAX_DPT=1.0,blurclip=1.0)
     print('stats of train data')
     get_loader_stats(loaders[0])
     print('______')
+
+# import matplotlib.pyplot as plt
+# plt.imshow(gt_step2[3,:,:])
+# plt.show()
+# mask=(seg>100)
+# plt.imshow(mask[3,:,:])
+# plt.show()
+
+# f, axarr = plt.subplots(1,2)
+# axarr[0].imshow(mask[3,:,:])
+# axarr[1].imshow(seg[3,:,:])
+# plt.show()
 
 #data statistics of the input images
 def get_loader_stats(loader):
@@ -215,9 +237,13 @@ def get_loader_stats(loader):
     depthmin,depthmax,depthmean=100,0,0
     blurmin,blurmax,blurmean=100,0,0
     for st_iter, sample_batch in enumerate(loader):
-        # Setting up input and output data
-        X = sample_batch['input'][:,0,:,:,:].float()
-        Y = sample_batch['output'].float()
+        X=sample_batch['rgb'].float()
+        depth=sample_batch['depth']
+        blur=sample_batch['blur']
+        seg=sample_batch['seg']
+        gt_step1=blur.float()
+        gt_step2=depth.float()
+        mask=(seg>100)*(gt_step2>0)
 
         xmin_=torch.min(X).cpu().item()
         if(xmin_<xmin):
@@ -227,27 +253,22 @@ def get_loader_stats(loader):
             xmax=xmax_
         xmean+=torch.mean(X).cpu().item()
         count+=1
-    
-        #blur (|s2-s1|/(s2*(s1-f)))
-        gt_step1 = Y[:, 0, :, :]
-        #depth in m
-        gt_step2 = Y[:, 1, :, :]
         
-        depthmin_=torch.min(gt_step2).cpu().item()
+        depthmin_=torch.min(gt_step2[mask>0]).cpu().item()
         if(depthmin_<depthmin):
             depthmin=depthmin_
-        depthmax_=torch.max(gt_step2).cpu().item()
+        depthmax_=torch.max(gt_step2[mask>0]).cpu().item()
         if(depthmax_>depthmax):
             depthmax=depthmax_
-        depthmean+=torch.mean(gt_step2).cpu().item()
+        depthmean+=torch.mean(gt_step2[mask>0]).cpu().item()
 
-        blurmin_=torch.min(gt_step1).cpu().item()
+        blurmin_=torch.min(gt_step1[mask>0]).cpu().item()
         if(blurmin_<blurmin):
             blurmin=blurmin_
-        blurmax_=torch.max(gt_step1).cpu().item()
+        blurmax_=torch.max(gt_step1[mask>0]).cpu().item()
         if(blurmax_>blurmax):
             blurmax=blurmax_
-        blurmean+=torch.mean(gt_step1).cpu().item()
+        blurmean+=torch.mean(gt_step1[mask>0]).cpu().item()
 
     print('X min='+str(xmin))
     print('X max='+str(xmax))

@@ -28,10 +28,10 @@ parser.add_argument('--savemodel', default='C:\\Users\\lahir\\models\\handblur\\
 
 
 
-f=25e-3
-N=1.9
+f=60e-3
+N=2.0
 px=6*1e-6*6
-s1=0.7
+s1=2.0
 kcam=f**2/(N*px)
 
 args = parser.parse_args()
@@ -39,9 +39,9 @@ args = parser.parse_args()
 '''
 load data
 '''
-datapath='D:\\handsdata\\nyu_out\\train\\'
+datapath='C:\\Users\\lahir\\kinect_hand_data\\extracted\\lahiru1\\cropped\\'
 loaders, total_steps = nyuloader.load_data(datapath,blur=1,train_split=0.8,WORKERS_NUM=0,
-    BATCH_SIZE=args.bs,MAX_DPT=args.depthscale,blurclip=args.blurclip)
+    BATCH_SIZE=10,MAX_DPT=14.0,blurclip=75.0)
 '''
 load model
 '''
@@ -74,10 +74,20 @@ def eval():
     iter=0
     mean_depth=0
     for st_iter, sample_batch in enumerate(loaders[1]):
-        # Setting up input and output data
-        X = sample_batch['input'][:,0,:,:,:].float().to('cuda')
-        Y = sample_batch['output'].float().to('cuda')
+        X=sample_batch['rgb'].float().to('cuda')
+        depth=sample_batch['depth']
+        blur=sample_batch['blur']
         seg=sample_batch['seg'].to('cuda')
+        gt_step1=blur.float().to('cuda')
+        gt_step2=depth.float().to('cuda')          
+
+        if(args.seg):
+            mask=(seg>100)*(gt_step2>0)
+        else:
+            mask=torch.ones_like(seg)
+        #if no hands are segmented
+        if(torch.sum(mask).item()==0):
+            continue
         
 
         # import matplotlib.pyplot as plt
@@ -89,22 +99,10 @@ def eval():
         # img=X.cpu().squeeze().numpy()
         # plt.imshow(img[0,:,:])
         # plt.show()
-
-        
-        #blur (|s2-s1|/(s2*(s1-f)))
-        gt_step1 = Y[:, :-1, :, :]
-        #depth in m
-        gt_step2 = Y[:, -1:, :, :]
         
         # we only use focal stacks with a single image
         stacknum = 1
-        if(args.seg):
-            mask=(seg>0).int()
-        else:
-            mask=torch.ones_like(seg)
-        if(torch.sum(mask).item()==0):
-            continue
-
+    
         X2_fcs = torch.ones([X.shape[0], 1 * stacknum, X.shape[2], X.shape[3]])
         s1_fcs = torch.ones([X.shape[0], 1 * stacknum, X.shape[2], X.shape[3]])
         for t in range(stacknum):
@@ -140,24 +138,22 @@ def train_model():
         blur_sum=0
         mean_blur=0
         for st_iter, sample_batch in enumerate(loaders[0]):
-            # Setting up input and output data
-            X = sample_batch['input'][:,0,:,:,:].float().to('cuda')
-            Y = sample_batch['output'].float().to('cuda')
+            X=sample_batch['rgb'].float().to('cuda')
+            depth=sample_batch['depth']
+            blur=sample_batch['blur']
             seg=sample_batch['seg'].to('cuda')
+            gt_step1=blur.float().to('cuda')
+            gt_step2=depth.float().to('cuda')          
 
             if(args.seg):
-                mask=(seg>0).int()
+                mask=(seg>100)*(gt_step2>0)
             else:
                 mask=torch.ones_like(seg)
+            #if no hands are segmented
             if(torch.sum(mask).item()==0):
                 continue
 
             optimizer.zero_grad()
-            
-            #blur (|s2-s1|/(s2*(s1-f)))
-            gt_step1 = Y[:, :-1, :, :]
-            #depth in m
-            gt_step2 = Y[:, -1:, :, :]
             
             # we only use focal stacks with a single image
             stacknum = 1
@@ -173,16 +169,26 @@ def train_model():
             s1_fcs = s1_fcs.float().to('cuda')
             # Forward and compute loss
             output_step1,output_step2,_ = model(X,camparam=X2_fcs,foc_dist=s1_fcs)
-            blur_sum+=torch.sum(output_step1*mask).item()/torch.sum(mask)
+            output_step1=torch.squeeze(output_step1)
+            output_step2=torch.squeeze(output_step2)
+ 
+            blur_sum+=torch.sum(output_step1[mask>0]).item()/torch.sum(mask)
             #blurpred=output_step1*(0.1-2.9e-3)*1.4398*7
-            depth_loss=criterion(output_step2*mask, gt_step2*mask)
-            blur_loss=criterion(output_step1*mask, gt_step1*mask)
+            depth_loss=criterion(output_step2[mask>0], gt_step2[mask>0])
+            blur_loss=criterion(output_step1[mask>0], gt_step1[mask>0])
             loss=depth_loss+blur_loss*args.blurweight
 
-            absloss=torch.sum(torch.abs(output_step1-gt_step1)*mask)/torch.sum(mask)
+            absloss=torch.sum(torch.abs(output_step1-gt_step1)[mask>0])/torch.sum(mask)
             absloss_sum+=absloss.item()
 
             loss.backward()
+            # gradient=0
+            # n=0
+            # for p in optimizer.param_groups[0]['params']:
+            #     if(p.grad is not None):
+            #         gradient+=torch.mean(p.grad).item()
+            #         n+=1
+            # print('mean gradient:'+str(gradient/n))
             optimizer.step()
 
             # Training log
@@ -202,14 +208,15 @@ def train_model():
                 total_iter = total_steps * epoch_iter + st_iter
                 loss_sum, iter_count = 0,0
         # Evaluate
-        depth_loss_eval=eval()
-        print('eval depth loss = %.5f'%depth_loss_eval)
-        model.train()
-        #save model if better than the previous best model
-        if(depth_loss_eval<min_depth_loss_eval):
-            print('saving model')
-            torch.save(model.state_dict(),args.savemodel+'best_seg_ep' + str(0) + '.pth')
-            min_depth_loss_eval=depth_loss_eval
+        if (epoch_iter+1) % 10 == 0:
+            depth_loss_eval=eval()
+            print('eval depth loss = %.5f'%depth_loss_eval)
+            model.train()
+            #save model if better than the previous best model
+            if(depth_loss_eval<min_depth_loss_eval):
+                print('saving model')
+                torch.save(model.state_dict(),args.savemodel+'best_seg_ep' + str(0) + '.pth')
+                min_depth_loss_eval=depth_loss_eval
 
         # # Save model
         # if (epoch_iter+1) % 10 == 0:
