@@ -30,8 +30,8 @@ def read_dpt(img_dpt_path):
 # plt.imshow(d)
 # plt.show()
 # to calculate circle of confusion
-def get_blur(s1,s2,f,kcam):
-    blur=abs(s2-s1)/s2 * 1/(s1-f)*kcam
+def get_blur(s1,s2,f):
+    blur=abs(s2-s1)/s2 * 1/(s1-f)
     return blur
 
 '''
@@ -100,7 +100,7 @@ class ImageDataset(torch.utils.data.Dataset):
         seg=np.expand_dims(seg,axis=2)
 
         #get blur
-        img_msk = get_blur(self.s1,img_dpt,self.f,self.kcam)
+        img_msk = get_blur(self.s1,img_dpt,self.f)
         img_msk = img_msk / self.blurclip
         mat_blur = img_msk.copy()[:, :, np.newaxis]
 

@@ -57,7 +57,7 @@ class AENet(nn.Module):
         )
 
         if flag_step2:
-            self.conv_down2_0 = self.convsblocks(2, self.num_filter * 1, act_fnc)
+            self.conv_down2_0 = self.convsblocks(1, self.num_filter * 1, act_fnc)
             self.pool2_0 = self.poolblock()
 
 
@@ -185,7 +185,8 @@ class AENet(nn.Module):
                         joint_pool = torch.cat([pool_temp[0], pool_max[0]], dim=1)
                         pool_temp.pop(0)
                     else:
-                        joint_pool =  torch.cat([mul[:, 1 * i:1 * (i + 1), :, :],foc_dist[:, 1 * i:1 * (i + 1), :, :]], dim=1)
+                        joint_pool =  mul[:, 1 * i:1 * (i + 1), :, :] 
+                        # torch.cat([mul[:, 1 * i:1 * (i + 1), :, :],foc_dist[:, 1 * i:1 * (i + 1), :, :]], dim=1)
                     conv = self.__getattr__('conv_down2_' + str(j + 0))(joint_pool)
                     down_temp.append(conv)
 
