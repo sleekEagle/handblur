@@ -25,6 +25,10 @@ def read_dpt(img_dpt_path):
     dpt_img=dpt_img/1000.
     return dpt_img
 
+# d=read_dpt('C:\\Users\\lahir\\kinect_hand_data\\extracted\\lahiru1\\depth\\00000.png')
+# import matplotlib.pyplot as plt
+# plt.imshow(d)
+# plt.show()
 # to calculate circle of confusion
 def get_blur(s1,s2,f,kcam):
     blur=abs(s2-s1)/s2 * 1/(s1-f)*kcam
@@ -67,10 +71,10 @@ class ImageDataset(torch.utils.data.Dataset):
 
         self.max_dpt = max_dpt
         #focal length in m
-        self.f=25e-3
-        self.N=1.9
-        self.px=6*1e-6*6
-        self.s1=0.7
+        self.f=60e-3
+        self.N=2.0
+        self.px=36*1e-6
+        self.s1=2.0
         self.kcam=self.f**2/(self.N*self.px)
 
     def __len__(self):
@@ -79,9 +83,12 @@ class ImageDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         ##### Read depth image
         ind = int(idx)
+        # print('dept:'+str(self.imglist_dpt[ind]))
+        # print('rgb:'+str(self.imglist_rgb[ind]))
         img_dpt = read_dpt(self.depthpath + self.imglist_dpt[ind])
         mat_dpt_scaled = img_dpt/self.max_dpt
         mat_dpt = mat_dpt_scaled.copy()[:, :, np.newaxis]
+        mat_dpt=self.s1/mat_dpt
 
         #read rgb image
         im=cv2.imread(self.rgbpath + self.imglist_rgb[ind],cv2.IMREAD_UNCHANGED)
@@ -214,22 +221,34 @@ min 0.0  max  74.20
 
 def get_data_stats(datapath,blurclip):
     loaders, total_steps = load_data(datapath,blur=1,train_split=0.8,WORKERS_NUM=0,
-        BATCH_SIZE=10,MAX_DPT=1.0,blurclip=1.0)
+        BATCH_SIZE=1,MAX_DPT=1.0,blurclip=1.0)
     print('stats of train data')
     get_loader_stats(loaders[0])
     print('______')
 
 # import matplotlib.pyplot as plt
-# plt.imshow(gt_step2[3,:,:])
-# plt.show()
-# mask=(seg>100)
-# plt.imshow(mask[3,:,:])
+# plt.imshow(gt_step2[0,:,:])
 # plt.show()
 
-# f, axarr = plt.subplots(1,2)
-# axarr[0].imshow(mask[3,:,:])
-# axarr[1].imshow(seg[3,:,:])
+# img=torch.permute(X[0,:,:,:],(1,2,0))
+# plt.imshow(img)
 # plt.show()
+
+# mask=(seg>100)*(gt_step2>0)
+# plt.imshow(mask[0,:,:])
+# plt.show()
+
+# b =  gt_step2 > 10.
+# indices = b.nonzero()
+
+# mask[0,30,247]
+
+# f, axarr = plt.subplots(1,2)
+# axarr[0].imshow(gt_step2[0,:,:])
+# axarr[1].imshow(mask[0,:,:])
+# plt.show()
+
+# depthmax_=torch.max(gt_step2[mask>0]).cpu().item()
 
 #data statistics of the input images
 def get_loader_stats(loader):
@@ -243,7 +262,10 @@ def get_loader_stats(loader):
         seg=sample_batch['seg']
         gt_step1=blur.float()
         gt_step2=depth.float()
-        mask=(seg>100)*(gt_step2>0)
+        mask=(seg>100)*(gt_step2>0)*(gt_step2<1.0)
+        m=torch.sum(mask).item()
+        if(m<20000):
+            continue
 
         xmin_=torch.min(X).cpu().item()
         if(xmin_<xmin):
@@ -258,6 +280,7 @@ def get_loader_stats(loader):
         if(depthmin_<depthmin):
             depthmin=depthmin_
         depthmax_=torch.max(gt_step2[mask>0]).cpu().item()
+
         if(depthmax_>depthmax):
             depthmax=depthmax_
         depthmean+=torch.mean(gt_step2[mask>0]).cpu().item()

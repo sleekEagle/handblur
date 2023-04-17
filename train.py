@@ -14,12 +14,12 @@ from model import defnet
 
 parser = argparse.ArgumentParser(description='camIndDefocus')
 parser.add_argument('--bs', type=int,default=12, help='training batch size')
-parser.add_argument('--depthscale', default=1.9,help='divide all depths by this value')
-parser.add_argument('--fscale', default=1.9,help='divide all focal distances by this value')
-parser.add_argument('--blurclip', default=25,help='Clip blur by this value : only applicable for camind model. Default=10')
+parser.add_argument('--depthscale', default=1.0,help='dilvide all depths by this value')
+parser.add_argument('--fscale', default=3.0,help='divide all focal distances by this value')
+parser.add_argument('--blurclip', default=78.0,help='Clip blur by this value : only applicable for camind model. Default=10')
 parser.add_argument('--blurweight', default=1.0,help='weight for blur loss')
-parser.add_argument('--checkpt', default='C:\\Users\\lahir\\models\\handblur\\best_ep0.pth', help='path to the saved model')
-parser.add_argument('--s2limits', nargs='+', default=[0.1,3.],  help='the interval of depth where the errors are calculated')
+parser.add_argument('--checkpt', default=None, help='path to the saved model')
+parser.add_argument('--s2limits', nargs='+', default=[0.5,1.0],  help='the interval of depth where the errors are calculated')
 parser.add_argument('--dataset', default='defocusnet', help='blender data path')
 parser.add_argument('--camind', type=bool,default=False, help='True: use camera independent model. False: use defocusnet model')
 parser.add_argument('--seg', type=bool,default=True, help='Use hand segmentation to train and eval')
@@ -27,21 +27,22 @@ parser.add_argument('--epochs', type=int,default=1000, help='training batch size
 parser.add_argument('--savemodel', default='C:\\Users\\lahir\\models\\handblur\\', help='path to the saved model')
 
 
-
 f=60e-3
 N=2.0
-px=6*1e-6*6
+px=36*1e-6
 s1=2.0
 kcam=f**2/(N*px)
 
 args = parser.parse_args()
+
+# 74.20/kcam*(s1-f)
 
 '''
 load data
 '''
 datapath='C:\\Users\\lahir\\kinect_hand_data\\extracted\\lahiru1\\cropped\\'
 loaders, total_steps = nyuloader.load_data(datapath,blur=1,train_split=0.8,WORKERS_NUM=0,
-    BATCH_SIZE=10,MAX_DPT=14.0,blurclip=75.0)
+    BATCH_SIZE=10,MAX_DPT=args.depthscale,blurclip=args.blurclip)
 '''
 load model
 '''
@@ -82,13 +83,13 @@ def eval():
         gt_step2=depth.float().to('cuda')          
 
         if(args.seg):
-            mask=(seg>100)*(gt_step2>0)
+            mask=(seg>100)*(s1/gt_step2>args.s2limits[0])*(s1/gt_step2<args.s2limits[1])
         else:
             mask=torch.ones_like(seg)
         #if no hands are segmented
-        if(torch.sum(mask).item()==0):
+        m=torch.sum(mask).item()
+        if(m<20000):
             continue
-        
 
         # import matplotlib.pyplot as plt
         # seg=sample_batch['seg']
@@ -105,17 +106,17 @@ def eval():
     
         X2_fcs = torch.ones([X.shape[0], 1 * stacknum, X.shape[2], X.shape[3]])
         s1_fcs = torch.ones([X.shape[0], 1 * stacknum, X.shape[2], X.shape[3]])
-        for t in range(stacknum):
-            #iterate through the batch
-            for i in range(X.shape[0]):
-                X2_fcs[i, t:(t + 1), :, :] = X2_fcs[i, t:(t + 1), :, :]/kcam*(0.7-25e-3)*(100)
-                s1_fcs[i, t:(t + 1), :, :] = s1_fcs[i, t:(t + 1), :, :]*(0.7)
+        # for t in range(stacknum):
+        #     #iterate through the batch
+        #     for i in range(X.shape[0]):
+        #         X2_fcs[i, t:(t + 1), :, :] = X2_fcs[i, t:(t + 1), :, :]/kcam*(s1-f)/args.fscale
+        #         s1_fcs[i, t:(t + 1), :, :] = s1_fcs[i, t:(t + 1), :, :]*s1/args.fscale
         X2_fcs = X2_fcs.float().to('cuda')
         s1_fcs = s1_fcs.float().to('cuda')
         # Forward and compute loss
         output_step1,output_step2,_ = model(X,camparam=X2_fcs,foc_dist=s1_fcs)
-        depth_loss=torch.sum(torch.square(output_step2*args.depthscale*mask-gt_step2*args.depthscale*mask))/torch.sum(mask)
-        # mean_depth+=(torch.sum(gt_step2*args.depthscale*mask)/torch.sum(mask)).item()
+        output_step2=torch.squeeze(output_step2,dim=1)
+        depth_loss=torch.sqrt(torch.mean(torch.square((s1/output_step2-s1/gt_step2)[mask>0])))
         total_d_loss+=depth_loss.item()
         iter+=1
     # print('mean depth='+str(mean_depth/iter))
@@ -124,6 +125,7 @@ def eval():
 
 
 def train_model():
+    print('training...')
     model.train()
     criterion = torch.nn.MSELoss()
     #criterion=F.smooth_l1_loss(reduction='none')
@@ -133,10 +135,9 @@ def train_model():
     print("Total number of epochs:", args.epochs)
     for e_iter in range(args.epochs):
         epoch_iter = e_iter
-        loss_sum, iter_count,absloss_sum= 0,0,0
+        loss_sum, iter_count= 0,0
         depthloss_sum,blurloss_sum=0,0
-        blur_sum=0
-        mean_blur=0
+
         for st_iter, sample_batch in enumerate(loaders[0]):
             X=sample_batch['rgb'].float().to('cuda')
             depth=sample_batch['depth']
@@ -146,11 +147,13 @@ def train_model():
             gt_step2=depth.float().to('cuda')          
 
             if(args.seg):
-                mask=(seg>100)*(gt_step2>0)
+                mask=(seg>100)*(s1/gt_step2>args.s2limits[0])*(s1/gt_step2<args.s2limits[1])
             else:
                 mask=torch.ones_like(seg)
+            # mask=gt_step2>0
             #if no hands are segmented
-            if(torch.sum(mask).item()==0):
+            m=torch.sum(mask).item()
+            if(m<20000):
                 continue
 
             optimizer.zero_grad()
@@ -160,11 +163,11 @@ def train_model():
 
             X2_fcs = torch.ones([X.shape[0], 1 * stacknum, X.shape[2], X.shape[3]])
             s1_fcs = torch.ones([X.shape[0], 1 * stacknum, X.shape[2], X.shape[3]])
-            for t in range(stacknum):
+            # for t in range(stacknum):
                 #iterate through the batch
-                for i in range(X.shape[0]):
-                    X2_fcs[i, t:(t + 1), :, :] = X2_fcs[i, t:(t + 1), :, :]/kcam*(0.7-25e-3)*(100)
-                    s1_fcs[i, t:(t + 1), :, :] = s1_fcs[i, t:(t + 1), :, :]*(0.7)
+                # for i in range(X.shape[0]):
+                    # X2_fcs[i, t:(t + 1), :, :] = X2_fcs[i, t:(t + 1), :, :]/kcam*(s1-f)/args.fscale
+                    # s1_fcs[i, t:(t + 1), :, :] = s1_fcs[i, t:(t + 1), :, :]*s1/args.fscale
             X2_fcs = X2_fcs.float().to('cuda')
             s1_fcs = s1_fcs.float().to('cuda')
             # Forward and compute loss
@@ -172,14 +175,9 @@ def train_model():
             output_step1=torch.squeeze(output_step1)
             output_step2=torch.squeeze(output_step2)
  
-            blur_sum+=torch.sum(output_step1[mask>0]).item()/torch.sum(mask)
-            #blurpred=output_step1*(0.1-2.9e-3)*1.4398*7
             depth_loss=criterion(output_step2[mask>0], gt_step2[mask>0])
             blur_loss=criterion(output_step1[mask>0], gt_step1[mask>0])
             loss=depth_loss+blur_loss*args.blurweight
-
-            absloss=torch.sum(torch.abs(output_step1-gt_step1)[mask>0])/torch.sum(mask)
-            absloss_sum+=absloss.item()
 
             loss.backward()
             # gradient=0
@@ -201,16 +199,14 @@ def train_model():
                 print('handblur ', 'Epoch [{}/{}], Step [{}/{}], blur loss: {:.4f},  depth loss: {:.4f}'
                       .format(epoch_iter + 1, args.epochs, st_iter + 1, total_steps, blurloss_sum / iter_count, depthloss_sum / iter_count))
     
-                absloss_sum=0
-                depth_sum,blur_sum=0,0
                 depthloss_sum,blurloss_sum=0,0
-
                 total_iter = total_steps * epoch_iter + st_iter
                 loss_sum, iter_count = 0,0
         # Evaluate
-        if (epoch_iter+1) % 10 == 0:
+        if (epoch_iter+1) % 1 == 0:
             depth_loss_eval=eval()
-            print('eval depth loss = %.5f'%depth_loss_eval)
+            depth_loss_eval=depth_loss_eval*100
+            print('eval depth RMSE = %.5f cm'%depth_loss_eval)
             model.train()
             #save model if better than the previous best model
             if(depth_loss_eval<min_depth_loss_eval):
