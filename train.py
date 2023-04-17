@@ -203,7 +203,7 @@ def train_model():
                 total_iter = total_steps * epoch_iter + st_iter
                 loss_sum, iter_count = 0,0
         # Evaluate
-        if (epoch_iter+1) % 1 == 0:
+        if (epoch_iter+1) % 10 == 0:
             depth_loss_eval=eval()
             depth_loss_eval=depth_loss_eval*100
             print('eval depth RMSE = %.5f cm'%depth_loss_eval)
