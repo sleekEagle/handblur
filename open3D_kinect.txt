@@ -1,0 +1,7 @@
+record data:
+python examples\python\reconstruction_system\sensors\azure_kinect_recorder.py --output C:\Users\lahir\kinect_hand_data\lahiru2\record.mkv --config C:\Users\lahir\code\handblur\config.json --align_depth_to_color
+
+view feed:
+python examples\python\reconstruction_system\sensors\azure_kinect_viewer.py --config C:\Users\lahir\code\handblur\config.json --align_depth_to_color
+
+

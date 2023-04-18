@@ -14,11 +14,12 @@ from model import defnet
 
 parser = argparse.ArgumentParser(description='camIndDefocus')
 parser.add_argument('--bs', type=int,default=12, help='training batch size')
+parser.add_argument('--lr', default=0.00001,help='dilvide all depths by this value')
 parser.add_argument('--depthscale', default=1.0,help='dilvide all depths by this value')
 parser.add_argument('--fscale', default=3.0,help='divide all focal distances by this value')
 parser.add_argument('--blurclip', default=2.0,help='Clip blur by this value : only applicable for camind model. Default=10')
 parser.add_argument('--blurweight', default=1.0,help='weight for blur loss')
-parser.add_argument('--checkpt', default=None, help='path to the saved model')
+parser.add_argument('--checkpt', default='C:\\Users\\lahir\\models\\handblur\\best_seg_ep0.pth', help='path to the saved model')
 parser.add_argument('--s2limits', nargs='+', default=[0.5,1.0],  help='the interval of depth where the errors are calculated')
 parser.add_argument('--dataset', default='defocusnet', help='blender data path')
 parser.add_argument('--camind', type=bool,default=False, help='True: use camera independent model. False: use defocusnet model')
@@ -129,7 +130,7 @@ def train_model():
     model.train()
     criterion = torch.nn.MSELoss()
     #criterion=F.smooth_l1_loss(reduction='none')
-    optimizer = optim.Adam(model_params, lr=0.0001)
+    optimizer = optim.Adam(model_params, lr=args.lr)
     min_depth_loss_eval=1000
     ##### Training
     print("Total number of epochs:", args.epochs)

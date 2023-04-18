@@ -22,7 +22,3 @@ plt.show()
 max(blurs)
 
 get_blur(0.97)
-
-#blurs
-f=50e-3 : 74.77
-f=150e-3 : 865.24
